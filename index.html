@@ -134,6 +134,33 @@
   .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 30px 0; border: 1px dashed var(--border); border-radius: var(--radius); }
 
   textarea#reflection { min-height: 80px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 12px; }
+  .tab-btn {
+    background: var(--surface); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 999px; padding: 7px 16px; font-family: var(--font-display); font-size: 12px;
+    cursor: pointer; font-weight: 500;
+  }
+  .tab-btn.active { background: var(--accent); color: var(--bg); border-color: var(--accent); font-weight: 700; }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+  .stat-box {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 12px 14px;
+  }
+  .stat-box .pnl-label { display: block; margin-bottom: 4px; }
+  .stat-box .pnl-value { font-size: 18px; }
+
+  .breakdown-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12.5px;
+  }
+  .breakdown-row:last-child { border-bottom: none; }
+  .breakdown-row .bd-date { color: var(--muted); }
+  .breakdown-list {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    overflow: hidden; margin-bottom: 8px;
+  }
 </style>
 </head>
 <body>
@@ -155,16 +182,28 @@
     </div>
   </header>
 
-  <div class="pnl-bar">
-    <div>
-      <div class="pnl-label">Today's PnL</div>
-      <div class="pnl-value" id="dailyPnl">0.00 SOL</div>
+  <div class="tabs">
+    <button class="tab-btn active" data-range="today">Today</button>
+    <button class="tab-btn" data-range="week">This Week</button>
+    <button class="tab-btn" data-range="month">This Month</button>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-box">
+      <span class="pnl-label">PnL</span>
+      <div class="pnl-value" id="statPnl">0.00 SOL</div>
     </div>
-    <div style="text-align:right">
-      <div class="pnl-label">Trades</div>
-      <div class="pnl-value" id="tradeCount" style="font-size:20px">0</div>
+    <div class="stat-box">
+      <span class="pnl-label">Win Rate</span>
+      <div class="pnl-value" id="statWinRate" style="font-size:18px">0 percent</div>
+    </div>
+    <div class="stat-box">
+      <span class="pnl-label">Trades</span>
+      <div class="pnl-value" id="statCount" style="font-size:18px">0</div>
     </div>
   </div>
+
+  <div class="breakdown-list" id="breakdownList" style="display:none;"></div>
 
   <div class="section-label">New Entry</div>
   <form class="entry" id="entryForm">
@@ -219,6 +258,86 @@ function getReflection() {
   return localStorage.getItem('ledger-reflection-' + todayKey()) || '';
 }
 
+// ---- date helpers ----
+function parseKeyDate(key) {
+  // key looks like YYYY-MM-DD, parse as local date (noon avoids DST edge issues)
+  const [y,m,d] = key.split('-').map(Number);
+  return new Date(y, m-1, d, 12);
+}
+function startOfWeek(date) {
+  const d = new Date(date);
+  const day = d.getDay(); // 0 = Sunday
+  d.setDate(d.getDate() - day);
+  d.setHours(0,0,0,0);
+  return d;
+}
+function getAllTradeDays() {
+  // returns [{ key, date, trades }] for every day that has trades saved, sorted ascending
+  const days = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('ledger-trades-')) {
+      const dateKey = key.replace('ledger-trades-', '');
+      let trades = [];
+      try { trades = JSON.parse(localStorage.getItem(key)) || []; } catch(e) {}
+      if (trades.length > 0) {
+        days.push({ key: dateKey, date: parseKeyDate(dateKey), trades });
+      }
+    }
+  }
+  days.sort((a,b) => a.date - b.date);
+  return days;
+}
+function statsFor(trades) {
+  const total = trades.reduce((s,t) => s + t.pnl, 0);
+  const wins = trades.filter(t => t.pnl > 0).length;
+  const winRate = trades.length ? Math.round((wins / trades.length) * 100) : 0;
+  return { total, count: trades.length, winRate };
+}
+
+let currentRange = 'today';
+
+function renderStats() {
+  const allDays = getAllTradeDays();
+  const now = new Date();
+  let relevantDays = [];
+
+  if (currentRange === 'today') {
+    const todaysDay = allDays.find(d => d.key === todayKey());
+    relevantDays = todaysDay ? [todaysDay] : [];
+  } else if (currentRange === 'week') {
+    const weekStart = startOfWeek(now);
+    relevantDays = allDays.filter(d => d.date >= weekStart);
+  } else if (currentRange === 'month') {
+    relevantDays = allDays.filter(d => d.date.getFullYear() === now.getFullYear() && d.date.getMonth() === now.getMonth());
+  }
+
+  const allTrades = relevantDays.flatMap(d => d.trades);
+  const s = statsFor(allTrades);
+  const pnlEl = $('statPnl');
+  pnlEl.textContent = (s.total >= 0 ? '+' : '') + s.total.toFixed(3) + ' SOL';
+  pnlEl.className = 'pnl-value ' + (s.total >= 0 ? 'pos' : 'neg');
+  $('statWinRate').textContent = s.winRate + ' percent';
+  $('statCount').textContent = s.count;
+
+  // breakdown list: show per-day rows for week/month views
+  const breakdownEl = $('breakdownList');
+  if (currentRange === 'today' || relevantDays.length <= 1) {
+    breakdownEl.style.display = 'none';
+    breakdownEl.innerHTML = '';
+  } else {
+    breakdownEl.style.display = 'block';
+    breakdownEl.innerHTML = relevantDays.slice().reverse().map(d => {
+      const ds = statsFor(d.trades);
+      const label = d.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      return `<div class="breakdown-row">
+        <span class="bd-date">${label}</span>
+        <span class="${ds.total >= 0 ? 'pos' : 'neg'}" style="font-family:var(--font-display);font-weight:700;">${ds.total >= 0 ? '+' : ''}${ds.total.toFixed(3)} SOL</span>
+      </div>`;
+    }).join('');
+  }
+}
+
 function render() {
   const trades = getTrades();
   const container = $('trades');
@@ -246,12 +365,6 @@ function render() {
     });
   }
 
-  const total = trades.reduce((s,t) => s + t.pnl, 0);
-  const pnlEl = $('dailyPnl');
-  pnlEl.textContent = (total >= 0 ? '+' : '') + total.toFixed(3) + ' SOL';
-  pnlEl.className = 'pnl-value ' + (total >= 0 ? 'pos' : 'neg');
-  $('tradeCount').textContent = trades.length;
-
   document.querySelectorAll('.del-btn').forEach(btn => {
     btn.onclick = () => {
       const trades = getTrades();
@@ -260,6 +373,8 @@ function render() {
       render();
     };
   });
+
+  renderStats();
 }
 
 function escapeHtml(str) {
@@ -298,6 +413,15 @@ $('fontSelect').addEventListener('change', e => {
 });
 
 $('reflection').addEventListener('input', e => saveReflection(e.target.value));
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentRange = btn.dataset.range;
+    renderStats();
+  });
+});
 
 loadState();
 $('dateLabel').textContent = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
