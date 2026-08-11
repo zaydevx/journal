@@ -161,6 +161,16 @@
     background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
     overflow: hidden; margin-bottom: 8px;
   }
+
+  .ca-row { display: flex; gap: 8px; }
+  #lookupBtn {
+    flex: 0 0 auto; background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 999px; padding: 10px 16px; font-family: var(--font-body); font-size: 12px;
+    font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  #lookupBtn:hover { border-color: var(--accent); color: var(--accent); }
+  #lookupBtn:disabled { opacity: .5; cursor: default; }
+  .ca-status { grid-column: 1 / -1; font-size: 11px; color: var(--muted); margin-top: -4px; min-height: 14px; }
 </style>
 </head>
 <body>
@@ -207,6 +217,11 @@
 
   <div class="section-label">New Entry</div>
   <form class="entry" id="entryForm">
+    <div class="full ca-row">
+      <input id="caInput" placeholder="Paste CA to auto-fill ticker" style="flex:1">
+      <button type="button" id="lookupBtn">Lookup</button>
+    </div>
+    <div class="ca-status" id="caStatus"></div>
     <input id="ticker" placeholder="Ticker ($DOGWIF)" required>
     <div class="pnl-input-row">
       <select id="pnlSign"><option value="1">+</option><option value="-1">−</option></select>
@@ -413,6 +428,34 @@ $('fontSelect').addEventListener('change', e => {
 });
 
 $('reflection').addEventListener('input', e => saveReflection(e.target.value));
+
+$('lookupBtn').addEventListener('click', async () => {
+  const ca = $('caInput').value.trim();
+  const statusEl = $('caStatus');
+  if (!ca) { statusEl.textContent = 'paste a CA first'; return; }
+
+  const btn = $('lookupBtn');
+  btn.disabled = true;
+  btn.textContent = '...';
+  statusEl.textContent = 'looking up...';
+
+  try {
+    const res = await fetch('https://api.dexscreener.com/tokens/v1/solana/' + encodeURIComponent(ca));
+    const data = await res.json();
+    const pair = Array.isArray(data) && data.length ? data[0] : null;
+    if (pair && pair.baseToken && pair.baseToken.symbol) {
+      $('ticker').value = '$' + pair.baseToken.symbol;
+      statusEl.textContent = 'found: ' + pair.baseToken.name;
+    } else {
+      statusEl.textContent = 'no match found, type ticker manually';
+    }
+  } catch (e) {
+    statusEl.textContent = 'lookup failed, type ticker manually';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Lookup';
+  }
+});
 
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
